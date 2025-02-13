@@ -1,0 +1,217 @@
+import pandas as pd
+import numpy as np
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import StandardScaler, MinMaxScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.decomposition import PCA
+from sklearn.utils import resample
+
+# Load Dataset
+def load_data(file_path):
+    """
+    Load dataset from a CSV file.
+
+    Args:
+        file_path (str): Path to the CSV file.
+
+    Returns:
+        DataFrame: Loaded dataset as a pandas DataFrame.
+    """
+    return pd.read_csv(file_path)
+
+# Handle Missing Data
+def handle_missing_data(df):
+    """
+    Handle missing data by imputing numerical and categorical columns separately.
+
+    Args:
+        df (DataFrame): Input DataFrame with missing values.
+
+    Returns:
+        DataFrame: DataFrame with missing values handled.
+    """
+    # Separate numerical and categorical columns
+    numerical_cols = df.select_dtypes(include=['int64', 'float64']).columns
+    categorical_cols = df.select_dtypes(include=['object']).columns
+
+    # Define imputers
+    num_imputer = SimpleImputer(strategy='mean')  # Mean for numerical columns
+    cat_imputer = SimpleImputer(strategy='most_frequent')  # Mode for categorical columns
+
+    # Impute missing data
+    df[numerical_cols] = num_imputer.fit_transform(df[numerical_cols])
+    df[categorical_cols] = cat_imputer.fit_transform(df[categorical_cols])
+
+    return df
+
+# Resample Dataset
+def resample_data(df, target_column):
+    """
+    Perform resampling to handle class imbalance.
+
+    Args:
+        df (DataFrame): Input DataFrame.
+        target_column (str): Target column name for resampling.
+
+    Returns:
+        DataFrame: Resampled DataFrame.
+    """
+    if target_column not in df.columns:
+        raise ValueError(f"Target column '{target_column}' not found in DataFrame.")
+
+    majority_class = df[df[target_column] == df[target_column].mode()[0]]
+    minority_class = df[df[target_column] != df[target_column].mode()[0]]
+
+    if len(minority_class) == 0:
+        raise ValueError("No minority class found for resampling.")
+
+    minority_upsampled = resample(minority_class, 
+                                  replace=True, 
+                                  n_samples=len(majority_class), 
+                                  random_state=42)
+
+    resampled_df = pd.concat([majority_class, minority_upsampled])
+    return resampled_df.reset_index(drop=True)
+
+# Discretize Features
+def discretize_features(df, columns, bins):
+    """
+    Discretize numerical features into bins.
+
+    Args:
+        df (DataFrame): Input DataFrame.
+        columns (list): List of columns to discretize.
+        bins (int): Number of bins.
+
+    Returns:
+        DataFrame: DataFrame with discretized features.
+    """
+    for column in columns:
+        if column not in df.columns:
+            raise ValueError(f"Column '{column}' not found in DataFrame.")
+        df[column] = pd.cut(df[column], bins=bins, labels=False)
+    return df
+
+# Feature Selection
+def select_features(df, target_column):
+    """
+    Perform feature selection using SelectKBest.
+
+    Args:
+        df (DataFrame): Input DataFrame.
+        target_column (str): Target column name.
+
+    Returns:
+        DataFrame: DataFrame with selected features.
+    """
+    if target_column not in df.columns:
+        raise ValueError(f"Target column '{target_column}' not found in DataFrame.")
+
+    X = df.drop(columns=[target_column])
+    y = df[target_column]
+
+    selector = SelectKBest(score_func=f_classif, k=min(10, X.shape[1]))  # Limit to 10 features or fewer
+    X_selected = selector.fit_transform(X, y)
+
+    selected_features = X.columns[selector.get_support()]
+    selected_df = pd.DataFrame(X_selected, columns=selected_features)
+    selected_df[target_column] = y.values
+
+    return selected_df
+
+# Dimensionality Reduction
+def reduce_dimensionality(df, n_components):
+    """
+    Perform dimensionality reduction using PCA.
+
+    Args:
+        df (DataFrame): Input DataFrame.
+        n_components (int): Number of principal components.
+
+    Returns:
+        DataFrame: DataFrame with reduced dimensions.
+    """
+    pca = PCA(n_components=min(n_components, df.shape[1]))  # Ensure n_components does not exceed number of features
+    reduced_data = pca.fit_transform(df)
+    reduced_df = pd.DataFrame(reduced_data, columns=[f'PC{i+1}' for i in range(pca.n_components_)])
+
+    return reduced_df
+
+# Scale Data
+def scale_data(df, method='standard'):
+    """
+    Scale numerical data using StandardScaler or MinMaxScaler.
+
+    Args:
+        df (DataFrame): Input DataFrame.
+        method (str): Scaling method ('standard' or 'normalization').
+
+    Returns:
+        DataFrame: Scaled DataFrame.
+    """
+    if method == 'standard':
+        scaler = StandardScaler()
+    elif method == 'normalization':
+        scaler = MinMaxScaler()
+    else:
+        raise ValueError("Invalid scaling method. Use 'standard' or 'normalization'.")
+
+    scaled_data = scaler.fit_transform(df)
+    scaled_df = pd.DataFrame(scaled_data, columns=df.columns)
+
+    return scaled_df
+
+# Full Preprocessing Pipeline
+def preprocess_data(file_path, target_column, bins=5, n_components=2, scaling_method='standard'):
+    """
+    Perform full preprocessing on the dataset.
+
+    Args:
+        file_path (str): Path to the CSV file.
+        target_column (str): Target column name.
+        bins (int): Number of bins for discretization.
+        n_components (int): Number of components for PCA.
+        scaling_method (str): Scaling method ('standard' or 'normalization').
+
+    Returns:
+        DataFrame: Fully preprocessed DataFrame.
+    """
+    # Load dataset
+    df = load_data(file_path)
+
+    # Handle missing data
+    df = handle_missing_data(df)
+
+    # Resample data
+    df = resample_data(df, target_column)
+
+    # Discretize features
+    numerical_cols = df.select_dtypes(include=['int64', 'float64']).columns
+    df = discretize_features(df, numerical_cols, bins)
+
+    # Feature selection
+    df = select_features(df, target_column)
+
+    # Dimensionality reduction
+    X = df.drop(columns=[target_column])
+    y = df[target_column]
+    X_reduced = reduce_dimensionality(X, n_components)
+
+    # Combine reduced features with target
+    final_df = pd.concat([X_reduced, y.reset_index(drop=True)], axis=1)
+
+    # Scale data (excluding target column)
+    features = final_df.drop(columns=[y.name])
+    scaled_features = scale_data(features, method=scaling_method)
+
+    final_df = pd.concat([scaled_features, y.reset_index(drop=True)], axis=1)
+
+    return final_df
+
+# Example Usage
+if __name__ == "__main__":
+    # Replace 'your_dataset.csv' and 'target_column' with your dataset and target column name
+    preprocessed_data = preprocess_data('your_dataset.csv', target_column='target', bins=5, n_components=2, scaling_method='standard')
+    print(preprocessed_data.head())
